@@ -47,11 +47,27 @@ All of these rules live in one place, `internal/policy`, and every tool call goe
 
 Draft and modify tools exist only when `READ_ONLY=false`.
 
+## Build
+
+You need Go 1.27 or newer. From the repository root:
+
+```sh
+CGO_ENABLED=0 go build -o protonmcp ./cmd/protonmcp
+```
+
+This produces `protonmcp`, a single static binary with no runtime dependencies. To build for another machine, set the target platform. For example, for a Linux amd64 VPS:
+
+```sh
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o protonmcp ./cmd/protonmcp
+```
+
+`go install ./cmd/protonmcp` puts the binary in `$(go env GOPATH)/bin` instead.
+
 ## Setup
 
 1. Install and sign in to Proton Mail Bridge. Note the IMAP port (default 1143) and the **Bridge password**, which is not your Proton password.
 2. Export Bridge's TLS certificate: in the app, use Settings → Advanced → Export TLS certificates; in the Bridge CLI, use `cert export`. Point `BRIDGE_CERT` at the exported `cert.pem`.
-3. Build: `CGO_ENABLED=0 go build ./cmd/protonmcp` (Go 1.27+).
+3. Build the binary (see [Build](#build)).
 4. Add the server to your MCP client, for example in Claude Code:
 
 ```sh
