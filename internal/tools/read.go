@@ -93,7 +93,7 @@ func parseDate(name, s string) (time.Time, error) {
 
 type getMessageIn struct {
 	ID       string `json:"id"`
-	MaxChars int    `json:"max_chars,omitempty" jsonschema:"body length cap, default 20000, max 200000"`
+	MaxChars int    `json:"max_chars,omitempty" jsonschema:"body length cap, default 20000, min 1000, max 200000"`
 }
 
 func addGetMessage(s *mcp.Server, d Deps) {
@@ -227,7 +227,7 @@ func addGetThread(s *mcp.Server, d Deps) {
 type getAttachmentIn struct {
 	ID       string `json:"id"`
 	Part     string `json:"part" jsonschema:"attachment part number from get_message, e.g. 2 or 1.2"`
-	MaxChars int    `json:"max_chars,omitempty" jsonschema:"default 20000, max 200000"`
+	MaxChars int    `json:"max_chars,omitempty" jsonschema:"default 20000, min 1000, max 200000"`
 }
 
 func addGetAttachment(s *mcp.Server, d Deps) {

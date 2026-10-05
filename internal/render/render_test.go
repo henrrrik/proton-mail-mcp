@@ -184,3 +184,20 @@ func TestDeepHTML(t *testing.T) {
 	src := strings.Repeat("<div>", 100000) + "deep" + strings.Repeat("</div>", 100000)
 	_ = HTMLToText(src) // must not crash
 }
+
+func TestAddressStringKeepsUnicodeNames(t *testing.T) {
+	cases := []struct {
+		in   Address
+		want string
+	}{
+		{Address{Address: "a@example.com"}, "a@example.com"},
+		{Address{Name: "Henrik Sjökvist", Address: "h@example.com"}, `"Henrik Sjökvist" <h@example.com>`},
+		{Address{Name: `Ann "AJ" Jones`, Address: "aj@example.com"}, `"Ann \"AJ\" Jones" <aj@example.com>`},
+		{Address{Name: `Back\slash`, Address: "b@example.com"}, `"Back\\slash" <b@example.com>`},
+	}
+	for _, c := range cases {
+		if got := c.in.String(); got != c.want {
+			t.Errorf("%+v.String() = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

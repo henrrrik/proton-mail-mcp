@@ -22,11 +22,17 @@ type Address struct {
 	Address string `json:"address"`
 }
 
+// nameQuoter escapes a display name for an RFC 5322 quoted-string.
+var nameQuoter = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
+// String formats the address for display. Unlike mail.Address.String, it
+// keeps non-ASCII names readable instead of RFC 2047-encoding them; the
+// result still parses with mail.ParseAddress, which drafts rely on.
 func (a Address) String() string {
 	if a.Name == "" {
 		return a.Address
 	}
-	return (&mail.Address{Name: a.Name, Address: a.Address}).String()
+	return `"` + nameQuoter.Replace(a.Name) + `" <` + a.Address + ">"
 }
 
 type Attachment struct {

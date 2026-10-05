@@ -96,3 +96,16 @@ func TestBuild(t *testing.T) {
 		t.Error("invalid recipient accepted")
 	}
 }
+
+func TestAddressStringRoundTrips(t *testing.T) {
+	for _, name := range []string{"Henrik Sjökvist", `Ann "AJ" Jones`, `Back\slash`, "李小龍"} {
+		in := render.Address{Name: name, Address: "x@example.com"}
+		got, err := ParseAddresses(strs([]render.Address{in}))
+		if err != nil {
+			t.Fatalf("%q: %v", name, err)
+		}
+		if got[0].Name != name || got[0].Address != in.Address {
+			t.Errorf("%q round-tripped to %q <%s>", name, got[0].Name, got[0].Address)
+		}
+	}
+}
