@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -61,7 +64,7 @@ func run() error {
 	mc := mail.New(mail.Options{Addr: cfg.IMAPAddr, User: cfg.User, Password: cfg.Password, TLS: tlsCfg})
 	defer mc.Close()
 
-	server := tools.NewServer(version, tools.Deps{Gate: gate, Mail: mc})
+	server := tools.NewServer(version, tools.Deps{Gate: gate, Mail: mc, Self: cfg.User})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -80,8 +83,31 @@ func serveHTTP(ctx context.Context, addr string, server *mcp.Server, log *slog.L
 	if !config.IsLoopback(host) {
 		return fmt.Errorf("-http: %q is not a loopback address", addr)
 	}
-	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	// Loopback is not a trust boundary: any local process or user could
+	// connect. Require a bearer token, from the environment or freshly made.
+	token := os.Getenv("PROTONMCP_HTTP_TOKEN")
+	if token == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return err
+		}
+		token = hex.EncodeToString(b)
+		fmt.Fprintf(os.Stderr, "HTTP bearer token (set PROTONMCP_HTTP_TOKEN to choose your own): %s\n", token)
+	}
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{
+		SessionTimeout:      30 * time.Minute,
+		MaxRequestBodyBytes: 1 << 20,
+	})
+	protected := http.NewCrossOriginProtection().Handler(mcpHandler)
+	want := []byte("Bearer " + token)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		protected.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute, IdleTimeout: 5 * time.Minute}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

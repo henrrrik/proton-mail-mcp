@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -32,6 +34,10 @@ type Client struct {
 
 	mu   sync.Mutex
 	conn *imapclient.Client
+	raw  net.Conn // under conn, for per-operation deadlines
+
+	specialMu sync.Mutex
+	special   *Special
 }
 
 func New(opts Options) *Client {
@@ -50,41 +56,124 @@ func (c *Client) Close() error {
 	return err
 }
 
-// do runs fn with a live, authenticated connection. If the connection has
-// dropped it is redialled once before fn runs. fn itself is never retried, so
-// a write that fails mid-flight is not repeated blindly.
-func (c *Client) do(fn func(*imapclient.Client) error) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn != nil && isClosed(c.conn) {
-		c.conn.Close()
-		c.conn = nil
+// read runs fn on a live connection. If the connection drops during fn,
+// it redials and runs fn once more: reads are safe to repeat.
+func (c *Client) read(fn func(*imapclient.Client) error) error {
+	err := c.do(false, fn)
+	if errors.Is(err, errConnLost) {
+		err = c.do(false, fn)
 	}
-	if c.conn == nil {
-		conn, err := c.dial()
-		if err != nil {
-			return err
-		}
-		c.conn = conn
-	}
-	err := fn(c.conn)
-	if err != nil && isClosed(c.conn) {
-		c.conn.Close()
-		c.conn = nil
+	return unwrapLost(err)
+}
+
+// write runs fn on a connection checked with NOOP just before, and never
+// retries it: a write that fails mid-flight may still have been applied.
+func (c *Client) write(fn func(*imapclient.Client) error) error {
+	err := c.do(true, fn)
+	if errors.Is(err, errConnLost) {
+		return fmt.Errorf("connection to Bridge dropped during a change; it may or may not have been applied, so check before retrying: %w", unwrapLost(err))
 	}
 	return err
 }
 
-func (c *Client) dial() (*imapclient.Client, error) {
-	conn, err := imapclient.DialStartTLS(c.opts.Addr, &imapclient.Options{TLSConfig: c.opts.TLS})
+var errConnLost = errors.New("connection lost")
+
+type lostError struct{ err error }
+
+func (e lostError) Error() string        { return e.err.Error() }
+func (e lostError) Is(target error) bool { return target == errConnLost }
+func (e lostError) Unwrap() error        { return e.err }
+
+func unwrapLost(err error) error {
+	if l, ok := err.(lostError); ok {
+		return l.err
+	}
+	return err
+}
+
+// do runs fn with a live, authenticated connection, dialling first if there
+// is none (or, with probe, if the current one fails a NOOP). If fn fails because the connection died, the connection is
+// discarded and the error is marked with errConnLost.
+func (c *Client) do(probe bool, fn func(*imapclient.Client) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		c.raw.SetDeadline(time.Now().Add(opTimeout))
+		if isClosed(c.conn) || (probe && c.conn.Noop().Wait() != nil) {
+			c.conn.Close()
+			c.conn = nil
+		}
+	}
+	if c.conn == nil {
+		if err := c.dialWithBackoff(); err != nil {
+			return err
+		}
+	}
+	// A hung Bridge must not block every tool forever.
+	c.raw.SetDeadline(time.Now().Add(opTimeout))
+	defer func() {
+		if c.raw != nil {
+			c.raw.SetDeadline(time.Time{})
+		}
+	}()
+	err := fn(c.conn)
+	var imapErr *imap.Error
+	if err != nil && !errors.As(err, &imapErr) && connDied(c.conn) {
+		c.conn.Close()
+		c.conn = nil
+		return lostError{err}
+	}
+	return err
+}
+
+// Bridge restarts drop connections; give it a moment to come back.
+var dialBackoff = []time.Duration{0, 250 * time.Millisecond, time.Second, 3 * time.Second}
+
+// opTimeout bounds one tool's IMAP work, including dialling.
+const opTimeout = 2 * time.Minute
+
+func (c *Client) dialWithBackoff() error {
+	var err error
+	for _, wait := range dialBackoff {
+		time.Sleep(wait)
+		if err = c.dial(); err == nil {
+			return nil
+		}
+		var imapErr *imap.Error
+		if errors.As(err, &imapErr) || strings.Contains(err.Error(), "pinned") {
+			return err // a refused login or a wrong certificate will not fix itself
+		}
+	}
+	return err
+}
+
+func (c *Client) dial() error {
+	raw, err := net.DialTimeout("tcp", c.opts.Addr, 30*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("connect to Bridge at %s: %w", c.opts.Addr, err)
+		return fmt.Errorf("connect to Bridge at %s: %w", c.opts.Addr, err)
+	}
+	raw.SetDeadline(time.Now().Add(opTimeout))
+	conn, err := imapclient.NewStartTLS(raw, &imapclient.Options{TLSConfig: c.opts.TLS})
+	if err != nil {
+		raw.Close()
+		return fmt.Errorf("connect to Bridge at %s: %w", c.opts.Addr, err)
 	}
 	if err := conn.Login(c.opts.User, c.opts.Password).Wait(); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("login to Bridge: %w", err)
+		return fmt.Errorf("login to Bridge: %w", err)
 	}
-	return conn, nil
+	c.conn, c.raw = conn, raw
+	return nil
+}
+
+// connDied waits briefly for the client to notice a dead connection.
+func connDied(conn *imapclient.Client) bool {
+	select {
+	case <-conn.Closed():
+		return true
+	case <-time.After(100 * time.Millisecond):
+		return isClosed(conn)
+	}
 }
 
 func isClosed(conn *imapclient.Client) bool {
@@ -127,7 +216,7 @@ func TLSConfig(certPath, host string, insecureLoopback bool) (*tls.Config, error
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, pinned) {
-				return errors.New("Bridge certificate does not match the pinned BRIDGE_CERT")
+				return errors.New("the Bridge certificate does not match the pinned BRIDGE_CERT")
 			}
 			return nil
 		},

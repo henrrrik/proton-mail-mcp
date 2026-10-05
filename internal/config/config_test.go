@@ -39,6 +39,7 @@ func TestFileThenEnvOverride(t *testing.T) {
 password_file = "` + pw + `"
 bridge_cert = "/tmp/cert.pem"
 read_only = false
+audit_log = "/tmp/audit.jsonl"
 deny_folders = ["Spam"]
 `
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
@@ -85,6 +86,8 @@ func TestValidation(t *testing.T) {
 		{"no cert", map[string]string{"BRIDGE_CERT": ""}, "BRIDGE_CERT is required"},
 		{"bad bool", map[string]string{"READ_ONLY": "maybe"}, "READ_ONLY"},
 		{"missing user", map[string]string{"PROTON_USER": ""}, "PROTON_USER"},
+		{"writes need audit", map[string]string{"READ_ONLY": "false"}, "AUDIT_LOG is required"},
+		{"writes with audit", map[string]string{"READ_ONLY": "false", "AUDIT_LOG": "/tmp/a.jsonl"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

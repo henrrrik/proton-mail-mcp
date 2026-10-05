@@ -29,7 +29,7 @@ func session(t *testing.T, opts policy.Options) (*mcp.ClientSession, *mailtest.S
 	}
 
 	ctx := context.Background()
-	server := tools.NewServer("test", tools.Deps{Gate: gate, Mail: mc})
+	server := tools.NewServer("test", tools.Deps{Gate: gate, Mail: mc, Self: mailtest.User})
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {

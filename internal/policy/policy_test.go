@@ -46,6 +46,12 @@ func TestFolderRules(t *testing.T) {
 		{"label allowed", Options{AllowFolders: []string{"INBOX", "Labels/Work"}}, "Labels/Work", true},
 		{"other names exact", Options{AllowFolders: []string{"Labels/Work"}}, "labels/work", false},
 		{"deny wins", Options{AllowFolders: []string{"Spam"}, DenyFolders: []string{"Spam"}}, "Spam", false},
+		{"views open without rules", Options{}, "All Mail", true},
+		{"deny list closes All Mail", Options{DenyFolders: []string{"Folders/Finance"}}, "All Mail", false},
+		{"deny list closes labels", Options{DenyFolders: []string{"Spam"}}, "Labels/Work", false},
+		{"deny list closes Starred", Options{DenyFolders: []string{"Spam"}}, "Starred", false},
+		{"deny list keeps real folders", Options{DenyFolders: []string{"Spam"}}, "Archive", true},
+		{"view allowed explicitly", Options{AllowFolders: []string{"INBOX", "All Mail"}, DenyFolders: []string{"Spam"}}, "All Mail", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,13 +84,13 @@ func TestAuditLogsWritesOnly(t *testing.T) {
 	}
 	g.now = func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) }
 
-	if err := g.Audit("get_message", Read, []string{"INBOX:1:2"}, "INBOX", nil); err != nil {
+	if err := g.Audit(Read, AuditEntry{Tool: "get_message", Phase: "done", IDs: []string{"INBOX:1:2"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.Audit("move", Modify, []string{"INBOX:1:2"}, "Archive", nil); err != nil {
+	if err := g.Audit(Modify, AuditEntry{Tool: "move", Phase: "done", IDs: []string{"INBOX:1:2"}, Folder: "Archive"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.Audit("set_flags", Modify, []string{"INBOX:1:3"}, "", errors.New("boom")); err != nil {
+	if err := g.Audit(Modify, AuditEntry{Tool: "set_flags", Phase: "done", IDs: []string{"INBOX:1:3"}, Error: "boom"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.Close(); err != nil {
@@ -103,13 +109,13 @@ func TestAuditLogsWritesOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &e); err != nil {
 		t.Fatal(err)
 	}
-	if e.Tool != "move" || e.Class != "modify" || e.Folder != "Archive" || !e.OK {
+	if e.Tool != "move" || e.Class != "modify" || e.Folder != "Archive" || e.Error != "" || e.Time.IsZero() {
 		t.Errorf("entry = %+v", e)
 	}
 	if err := json.Unmarshal([]byte(lines[1]), &e); err != nil {
 		t.Fatal(err)
 	}
-	if e.OK || e.Error != "boom" {
+	if e.Error != "boom" {
 		t.Errorf("failed entry = %+v", e)
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -92,21 +93,23 @@ func (g *Gate) Allow(c Class) error {
 
 // FolderAllowed reports whether a mailbox may be read or written. The deny
 // list wins over the allow list; an empty allow list permits everything.
+//
+// Bridge's views (All Mail, Starred and every label) show messages that
+// live in other folders, so they could expose denied mail. Whenever a deny
+// list is set, views are refused unless the allow list names them.
 func (g *Gate) FolderAllowed(name string) bool {
-	for _, d := range g.deny {
-		if sameFolder(d, name) {
-			return false
-		}
+	if slices.ContainsFunc(g.deny, func(d string) bool { return sameFolder(d, name) }) {
+		return false
 	}
-	if len(g.allow) == 0 {
-		return true
+	allowed := slices.ContainsFunc(g.allow, func(a string) bool { return sameFolder(a, name) })
+	if len(g.deny) > 0 && isView(name) {
+		return allowed
 	}
-	for _, a := range g.allow {
-		if sameFolder(a, name) {
-			return true
-		}
-	}
-	return false
+	return len(g.allow) == 0 || allowed
+}
+
+func isView(name string) bool {
+	return name == "All Mail" || name == "Starred" || strings.HasPrefix(name, "Labels/")
 }
 
 // CheckFolder is FolderAllowed as an error.
@@ -126,25 +129,25 @@ func (g *Gate) CheckBatch(n int) error {
 }
 
 // AuditEntry describes one write call. It must never carry message bodies.
+// Each call is logged twice: phase "start" before it runs, so a crash still
+// leaves a trace, and phase "done" with the outcome.
 type AuditEntry struct {
 	Time   time.Time `json:"time"`
 	Tool   string    `json:"tool"`
 	Class  string    `json:"class"`
+	Phase  string    `json:"phase"`
 	IDs    []string  `json:"ids,omitempty"`
 	Folder string    `json:"folder,omitempty"`
-	OK     bool      `json:"ok"`
+	Result any       `json:"result,omitempty"`
 	Error  string    `json:"error,omitempty"`
 }
 
 // Audit appends one JSON line for a write call. Read calls are not logged.
-func (g *Gate) Audit(tool string, c Class, ids []string, folder string, callErr error) error {
+func (g *Gate) Audit(c Class, e AuditEntry) error {
 	if g.audit == nil || c == Read {
 		return nil
 	}
-	e := AuditEntry{Time: g.now().UTC(), Tool: tool, Class: c.String(), IDs: ids, Folder: folder, OK: callErr == nil}
-	if callErr != nil {
-		e.Error = callErr.Error()
-	}
+	e.Time, e.Class = g.now().UTC(), c.String()
 	b, err := json.Marshal(e)
 	if err != nil {
 		return err

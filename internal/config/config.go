@@ -114,6 +114,9 @@ func (c *Config) validate() error {
 			errs = append(errs, errors.New("BRIDGE_INSECURE_LOOPBACK only applies to loopback hosts"))
 		}
 	}
+	if !c.ReadOnly && c.AuditLog == "" {
+		errs = append(errs, errors.New("AUDIT_LOG is required when READ_ONLY=false"))
+	}
 	if c.BridgeCert == "" && !c.InsecureLoopback {
 		errs = append(errs, errors.New("BRIDGE_CERT is required (or BRIDGE_INSECURE_LOOPBACK=true for a loopback Bridge)"))
 	}
