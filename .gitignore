@@ -1,0 +1,4 @@
+/protonmcp
+*.test
+*.pem
+*.jsonl
