@@ -52,10 +52,11 @@ Draft and modify tools exist only when `READ_ONLY=false`.
 You need Go 1.27 or newer. From the repository root:
 
 ```sh
-CGO_ENABLED=0 go build -o protonmcp ./cmd/protonmcp
+mkdir -p $HOME/.local/bin
+CGO_ENABLED=0 go build -o $HOME/.local/bin/protonmcp ./cmd/protonmcp
 ```
 
-This produces `protonmcp`, a single static binary with no runtime dependencies. To build for another machine, set the target platform. For example, for a Linux amd64 VPS:
+This produces `~/.local/bin/protonmcp`, a single static binary with no runtime dependencies. To build for another machine, set the target platform. For example, for a Linux amd64 VPS:
 
 ```sh
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o protonmcp ./cmd/protonmcp
@@ -75,7 +76,7 @@ claude mcp add proton-mail \
   -e PROTON_USER=you@proton.me \
   -e PROTON_BRIDGE_PASSWORD_FILE=$HOME/.config/protonmcp/bridge-password \
   -e BRIDGE_CERT=$HOME/.config/protonmcp/cert.pem \
-  -- /path/to/protonmcp
+  -- $HOME/.local/bin/protonmcp
 ```
 
 ### Configuration
